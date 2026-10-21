@@ -1,0 +1,98 @@
+---
+title: "Uninsured Rates in Two Florida Counties (2008-2022)"
+author: "Academic portfolio project"
+output: html_document
+---
+
+## Project objective
+
+Explore annual uninsured percentages in Miami-Dade and Bradford counties, assess stationarity, fit candidate ARIMA models, and generate five-year forecasts. This cleaned portfolio version is based on the author's original R code and report; it is **not** a claim that all original numerical findings have been reproduced.
+
+## Data and preparation
+
+The included CSV has 2008-2021 observations from the author's cleaned Excel workbook and 2022 observations transcribed from the author's updated report appendix. `PCTUI` is the uninsured **percentage**, not the number of uninsured people. `PCTUI_MOE` is the reported margin of error; this script does not use it as a modeling weight.
+
+```{r setup, message=FALSE, warning=FALSE}
+library(forecast)
+library(tseries)
+library(ggplot2)
+knitr::opts_chunk$set(echo=TRUE, fig.width=8, fig.height=4.5)
+```
+
+```{r load-data}
+# Knit this file from the repository root, or set the knit root to the repository root.
+path <- if (file.exists("data/florida_uninsured_2008_2022.csv")) {
+  "data/florida_uninsured_2008_2022.csv"
+} else {
+  "../data/florida_uninsured_2008_2022.csv"
+}
+dat <- read.csv(path, stringsAsFactors=FALSE)
+stopifnot(all(c("Year", "County", "PCTUI") %in% names(dat)))
+stopifnot(!anyDuplicated(dat[c("Year", "County")]))
+stopifnot(all(is.finite(dat$PCTUI)), all(dat$PCTUI >= 0 & dat$PCTUI <= 100))
+stopifnot(all(sort(unique(dat$Year)) == 2008:2022))
+print(aggregate(PCTUI ~ County, data=dat, FUN=function(x) c(first=x[1], last=x[length(x)])))
+```
+
+## Historical trends
+
+```{r trends}
+ggplot(dat, aes(x=Year,y=PCTUI,color=County)) +
+  geom_line(linewidth=1) + geom_point() +
+  scale_x_continuous(breaks=seq(2008,2022,2)) +
+  labs(title="Uninsured percentages, 2008-2022",y="Uninsured (%)",x="Year") +
+  theme_minimal()
+```
+
+## Stationarity and ARIMA modeling
+
+Annual observations provide only 15 points per county. Models and ADF tests should therefore be interpreted cautiously. `auto.arima` is run with `seasonal=FALSE` because these are annual observations, not a seasonal series.
+
+```{r models}
+counties <- c("Miami-Dade County", "Bradford County")
+series <- lapply(counties, function(nm) {
+  d <- dat[dat$County == nm, ]
+  d <- d[order(d$Year), ]
+  stopifnot(identical(d$Year, 2008:2022))
+  ts(d$PCTUI, start=2008, frequency=1)
+})
+names(series) <- counties
+fits <- lapply(series, function(x) auto.arima(x, seasonal=FALSE, stepwise=FALSE, approximation=FALSE))
+for (nm in counties) {
+  cat("\n###", nm, "\n")
+  print(adf.test(series[[nm]]))
+  print(fits[[nm]])
+  print(checkresiduals(fits[[nm]]))
+}
+```
+
+## Five-year forecasts
+
+```{r forecasts}
+forecasts <- lapply(fits, forecast, h=5)
+for (nm in counties) {
+  plot(forecasts[[nm]], main=paste(nm, "uninsured percentage forecast"), ylab="Uninsured (%)")
+  print(forecasts[[nm]])
+}
+```
+
+## Cross-correlation (exploratory)
+
+The original project explored correlations at different lags. Raw trends can create misleading cross-correlations, and the sign of a CCF lag must be checked before claiming one county leads the other. The plot below is exploratory, **not evidence of causation**.
+
+```{r cross-correlation}
+ccf(series[["Miami-Dade County"]], series[["Bradford County"]],
+    main="Cross-correlation of annual uninsured percentages")
+```
+
+## Interpretation
+
+The source report describes a substantial decline in uninsured percentages over 2008-2022 in both counties, with different year-to-year patterns. Re-run the R Markdown document to obtain the selected models, diagnostics, and current forecast tables. Do not substitute the source report's original model claims for the rerun output without verification.
+
+## Limitations
+
+- Only 15 annual observations per county; forecasts are uncertain.
+- 2022 data came from the report appendix, not an independently re-imported 2022 Census CSV.
+- The report's 2022 standard-error column appears inconsistent with earlier years; those values were not carried into this dataset.
+- Annual observations do not justify seasonal ARIMA parameters.
+- County-level associations are not causal effects.
